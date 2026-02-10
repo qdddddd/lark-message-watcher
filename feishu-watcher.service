@@ -1,0 +1,17 @@
+[Unit]
+Description=Feishu Pattern Bot (User)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/qdu/projects/lark-bot/message_watcher
+EnvironmentFile=/home/qdu/projects/lark-bot/message_watcher/.env
+ExecStart=/home/qdu/.venv/bin/python /home/qdu/projects/lark-bot/message_watcher/src/main.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

@@ -2,7 +2,7 @@
 
 This project runs one service:
 
-- `bot_service`: uses `lark-oapi` long connection (WebSocket) to receive Feishu group message events, match a regex pattern, and execute a server-side script directly.
+- `src`: uses `lark-oapi` long connection (WebSocket) to receive Feishu group message events, match a regex pattern, and execute a server-side script directly.
 
 ## 1) Install
 
@@ -33,10 +33,10 @@ LOG_LEVEL=INFO
 Feishu SDK long connection worker:
 
 ```bash
-python bot_service/main.py
+python src/main.py
 ```
 
-`bot_service/main.py` loads `.env` automatically.
+`src/main.py` loads `.env` automatically.
 
 ## 4) Configure Feishu app
 
@@ -48,7 +48,7 @@ python bot_service/main.py
 
 ## 5) How it works
 
-1. `bot_service` receives Feishu events over long connection.
+1. This service receives Feishu events over long connection.
 2. Bot checks only group text messages.
 3. Bot applies `MATCH_PATTERN`.
 4. If matched, bot sends a "script started" message to the same chat.

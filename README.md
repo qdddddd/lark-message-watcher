@@ -1,4 +1,4 @@
-# Feishu Group Pattern Bot
+# Feishu Group Message Watcher Bot
 
 This project runs one service:
 

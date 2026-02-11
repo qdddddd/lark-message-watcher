@@ -152,7 +152,7 @@ def _handle_message_event(data: lark.im.v1.P2ImMessageReceiveV1) -> None:
     if not matched:
         return
 
-    logger.debug(
+    logger.info(
         "Pattern matched: message_id=%s chat_id=%s matched_text=%r",
         message.message_id,
         message.chat_id,

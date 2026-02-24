@@ -164,24 +164,40 @@ def _run_script(trigger: dict[str, Any], on_started: Callable[[], None] | None =
     return process.returncode, stdout, stderr
 
 
-def _send_text_to_chat(chat_id: str, text: str) -> None:
-    if not chat_id:
+def _send_text_to_chat(
+    chat_id: str, text: str, quote_message_id: str | None = None
+) -> None:
+    if not chat_id and not quote_message_id:
         return
 
-    request = (
-        lark.im.v1.CreateMessageRequest.builder()
-        .receive_id_type("chat_id")
-        .request_body(
-            lark.im.v1.CreateMessageRequestBody.builder()
-            .receive_id(chat_id)
-            .msg_type("text")
-            .content(json.dumps({"text": text}, ensure_ascii=False))
+    if quote_message_id:
+        request = (
+            lark.im.v1.ReplyMessageRequest.builder()
+            .message_id(quote_message_id)
+            .request_body(
+                lark.im.v1.ReplyMessageRequestBody.builder()
+                .msg_type("text")
+                .content(json.dumps({"text": text}, ensure_ascii=False))
+                .reply_in_thread(False)
+                .build()
+            )
             .build()
         )
-        .build()
-    )
-
-    response = _feishu_client.im.v1.message.create(request)
+        response = _feishu_client.im.v1.message.reply(request)
+    else:
+        request = (
+            lark.im.v1.CreateMessageRequest.builder()
+            .receive_id_type("chat_id")
+            .request_body(
+                lark.im.v1.CreateMessageRequestBody.builder()
+                .receive_id(chat_id)
+                .msg_type("text")
+                .content(json.dumps({"text": text}, ensure_ascii=False))
+                .build()
+            )
+            .build()
+        )
+        response = _feishu_client.im.v1.message.create(request)
     if not response.success():
         logger.warning(
             "Failed to send Feishu message: code=%s msg=%s",
@@ -237,7 +253,8 @@ def _process_message(message_id: str, chat_id: str, sender_id: str | None, text:
             notify_payload,
             on_started=lambda: _send_text_to_chat(
                 chat_id,
-                f"Executing update script triggered by message {message_id}",
+                f"Start executing update script",
+                quote_message_id=message_id,
             ),
         )
     except subprocess.TimeoutExpired:

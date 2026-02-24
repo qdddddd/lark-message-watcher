@@ -51,6 +51,8 @@ POLLING_INTERVAL_FAST_SEC = int(os.getenv("POLLING_INTERVAL_FAST_SEC", "30"))
 POLLING_INTERVAL_SLOW_SEC = int(os.getenv("POLLING_INTERVAL_SLOW_SEC", "300"))
 POLLING_FAST_START_HOUR = int(os.getenv("POLLING_FAST_START_HOUR", "14"))
 POLLING_FAST_END_HOUR = int(os.getenv("POLLING_FAST_END_HOUR", "15"))
+POLLING_HISTORY_DAYS = max(1, int(os.getenv("POLLING_HISTORY_DAYS", "3")))
+POLLING_PAGE_SIZE = max(1, int(os.getenv("POLLING_PAGE_SIZE", "50")))
 POLLING_CHAT_IDS = [cid.strip() for cid in os.getenv("POLLING_CHAT_IDS", "").split(",") if cid.strip()]
 STATE_FILE_PATH = os.getenv("STATE_FILE_PATH", ".message_state.json")
 FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
@@ -87,11 +89,11 @@ def _extract_text(content_raw: str) -> str:
 def _load_state() -> None:
     """Load last processed timestamps from state file."""
     global _last_processed_timestamps, _last_match_date
-    
+
     if not os.path.exists(STATE_FILE_PATH):
         logger.info("No state file found, starting fresh")
         return
-    
+
     try:
         with open(STATE_FILE_PATH, "r", encoding="utf-8") as f:
             state = json.load(f)
@@ -116,10 +118,10 @@ def _save_state() -> None:
                 "last_processed_timestamps": _last_processed_timestamps,
                 "last_match_date": _last_match_date,
             }
-        
+
         with open(STATE_FILE_PATH, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
-        
+
         logger.debug("Saved state to %s", STATE_FILE_PATH)
     except Exception as e:
         logger.warning("Failed to save state file: %s", e)
@@ -129,7 +131,7 @@ def _is_today(timestamp_ms: int) -> bool:
     """Check if a timestamp (in milliseconds) is from today (UTC+8)."""
     if not timestamp_ms:
         return False
-    
+
     msg_date = datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC_PLUS_8).date()
     today = datetime.now(UTC_PLUS_8).date()
     return msg_date == today
@@ -164,9 +166,7 @@ def _run_script(trigger: dict[str, Any], on_started: Callable[[], None] | None =
     return process.returncode, stdout, stderr
 
 
-def _send_text_to_chat(
-    chat_id: str, text: str, quote_message_id: str | None = None
-) -> None:
+def _send_text_to_chat(chat_id: str, text: str, quote_message_id: str | None = None) -> None:
     if not chat_id and not quote_message_id:
         return
 
@@ -209,7 +209,7 @@ def _send_text_to_chat(
 def _process_message(message_id: str, chat_id: str, sender_id: str | None, text: str) -> None:
     """Process a message and execute script if pattern matches."""
     global _last_match_date
-    
+
     # Check if already processed
     with _processed_messages_lock:
         if message_id in _processed_message_ids:
@@ -359,7 +359,7 @@ def _get_polling_interval() -> int | None:
     """
     Get the current polling interval based on time of day and pattern match status (UTC+8).
     Returns None if polling should be skipped.
-    
+
     Schedule:
     - Before 14:00: No polling
     - 14:00-15:00: Fast polling (30 seconds)
@@ -369,15 +369,15 @@ def _get_polling_interval() -> int | None:
     now = datetime.now(UTC_PLUS_8)
     current_hour = now.hour
     today = now.strftime("%Y-%m-%d")
-    
+
     # Check if pattern was matched today
     with _state_lock:
-        matched_today = (_last_match_date == today)
-    
+        matched_today = _last_match_date == today
+
     if matched_today:
         # Pattern already matched today, stop polling until tomorrow
         return None
-    
+
     if current_hour < POLLING_FAST_START_HOUR:
         # Before 14:00 - no polling
         return None
@@ -400,27 +400,28 @@ def _poll_messages_loop() -> None:
         len(POLLING_CHAT_IDS),
     )
     logger.info(
-        "Polling schedule: %d:00-%d:00=%ds, after %d:00=%ds, stops after pattern match",
+        "Polling schedule: %d:00-%d:00=%ds, after %d:00=%ds, stops after pattern match, history=%d day(s)",
         POLLING_FAST_START_HOUR,
         POLLING_FAST_END_HOUR,
         POLLING_INTERVAL_FAST_SEC,
         POLLING_FAST_END_HOUR,
         POLLING_INTERVAL_SLOW_SEC,
+        POLLING_HISTORY_DAYS,
     )
 
     last_logged_state = None
-    
+
     while True:
         try:
             now = datetime.now(UTC_PLUS_8)
             today = now.strftime("%Y-%m-%d")
             current_hour = now.hour
-            
+
             with _state_lock:
-                matched_today = (_last_match_date == today)
-            
+                matched_today = _last_match_date == today
+
             interval = _get_polling_interval()
-            
+
             # Determine current state for logging
             if matched_today:
                 current_state = "matched_today"
@@ -430,7 +431,7 @@ def _poll_messages_loop() -> None:
                 current_state = f"fast_{interval}s"
             else:
                 current_state = f"slow_{interval}s"
-            
+
             # Log state changes
             if current_state != last_logged_state:
                 if matched_today:
@@ -458,7 +459,7 @@ def _poll_messages_loop() -> None:
                         now.strftime("%H:%M:%S"),
                     )
                 last_logged_state = current_state
-            
+
             if interval is not None:
                 # Polling is active
                 for chat_id in POLLING_CHAT_IDS:
@@ -467,11 +468,7 @@ def _poll_messages_loop() -> None:
             else:
                 # Polling is disabled, check every minute if we should start
                 time.sleep(60)
-                
-        except Exception as e:
-            logger.error("Error during message polling: %s", e)
-            time.sleep(60)
-                
+
         except Exception as e:
             logger.error("Error during message polling: %s", e)
             time.sleep(60)
@@ -480,33 +477,71 @@ def _poll_messages_loop() -> None:
 def _poll_chat_messages(chat_id: str) -> None:
     """Fetch recent messages from a chat and process them."""
     try:
-        request = (
-            lark.im.v1.ListMessageRequest.builder()
-            .container_id_type("chat")
-            .container_id(chat_id)
-            .page_size(20)  # Fetch last 20 messages
-            .build()
-        )
+        now = datetime.now(UTC_PLUS_8)
+        history_start = now - timedelta(days=POLLING_HISTORY_DAYS - 1)
+        history_start = history_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        history_start_sec = int(history_start.timestamp())
 
-        response = _feishu_client.im.v1.message.list(request)
+        items = []
+        page_token = ""
+        page_count = 0
 
-        if not response.success():
-            logger.warning(
-                "Failed to fetch messages from chat %s: code=%s msg=%s",
-                chat_id,
-                response.code,
-                response.msg,
+        while True:
+            builder = (
+                lark.im.v1.ListMessageRequest.builder()
+                .container_id_type("chat")
+                .container_id(chat_id)
+                .start_time(str(history_start_sec))
+                .page_size(POLLING_PAGE_SIZE)
             )
-            return
+            if page_token:
+                builder = builder.page_token(page_token)
+
+            request = builder.build()
+            response = _feishu_client.im.v1.message.list(request)
+            page_count += 1
+
+            if not response.success():
+                logger.warning(
+                    "Failed to fetch messages from chat %s: code=%s msg=%s",
+                    chat_id,
+                    response.code,
+                    response.msg,
+                )
+                return
+
+            if response.data and response.data.items:
+                items.extend(response.data.items)
+
+            if not response.data or not response.data.has_more:
+                break
+
+            page_token = response.data.page_token or ""
+            if not page_token:
+                break
+
+        logger.info(
+            "Poll fetch summary: chat_id=%s fetched=%d page(s)=%d history_days=%d",
+            chat_id,
+            len(items),
+            page_count,
+            POLLING_HISTORY_DAYS,
+        )
 
         # Update last message time for health check
         global _last_message_time
         with _health_check_lock:
             _last_message_time = time.time()
 
-        if not response.data or not response.data.items:
-            logger.debug("No messages found in chat %s", chat_id)
+        if not items:
+            logger.debug(
+                "No messages found in chat %s within last %d day(s)",
+                chat_id,
+                POLLING_HISTORY_DAYS,
+            )
             return
+
+        items.sort(key=lambda msg: int(msg.create_time) if msg.create_time else 0)
 
         # Get last processed timestamp for this chat
         with _state_lock:
@@ -516,14 +551,14 @@ def _poll_chat_messages(chat_id: str) -> None:
         processed_count = 0
 
         # Process messages in chronological order (oldest first)
-        for message in reversed(response.data.items):
+        for message in items:
             if not message.message_id:
                 continue
 
             # Parse message timestamp (in milliseconds)
             msg_timestamp = int(message.create_time) if message.create_time else 0
 
-            # Skip if not from today
+            # Skip if not from today.
             if not _is_today(msg_timestamp):
                 logger.debug(
                     "Skipping message %s: not from today (timestamp: %s)",
